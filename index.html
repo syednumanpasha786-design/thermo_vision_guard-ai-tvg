@@ -1,0 +1,1126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ThermoVision Guard AI — Smart Fire Intelligence</title>
+<link rel="icon" href="https://media.base44.com/images/public/user_695a0e94c8d26bdb49242b70/5291c1a0a_image.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+  window.tailwind = window.tailwind || {};
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        colors: {
+          background: 'hsl(var(--background))',
+          foreground: 'hsl(var(--foreground))',
+          card: 'hsl(var(--card))',
+          primary: 'hsl(var(--primary))',
+          'primary-foreground': 'hsl(var(--primary-foreground))',
+          secondary: 'hsl(var(--secondary))',
+          'secondary-foreground': 'hsl(var(--secondary-foreground))',
+          muted: 'hsl(var(--muted))',
+          'muted-foreground': 'hsl(var(--muted-foreground))',
+          border: 'hsl(var(--border))',
+          destructive: 'hsl(var(--destructive))'
+        },
+        fontFamily: { sans: ['Inter', 'sans-serif'] }
+      }
+    }
+  };
+</script>
+<style>
+  :root {
+    --background: 210 40% 99%; --foreground: 222 25% 14%; --card: 0 0% 100%;
+    --primary: 25 95% 53%; --primary-foreground: 0 0% 100%; --secondary: 220 20% 96%;
+    --secondary-foreground: 222 25% 14%; --muted: 220 20% 96%; --muted-foreground: 220 12% 44%;
+    --border: 220 18% 90%; --destructive: 0 84% 60%;
+  }
+  .dark {
+    --background: 222 47% 5%; --foreground: 210 40% 98%; --card: 222 44% 8%;
+    --primary: 25 95% 53%; --primary-foreground: 0 0% 100%; --secondary: 222 30% 14%;
+    --secondary-foreground: 210 40% 98%; --muted: 222 30% 12%; --muted-foreground: 215 20% 65%;
+    --border: 222 30% 16%; --destructive: 0 84% 60%;
+  }
+  body { font-family: 'Inter', sans-serif; background: hsl(var(--background)); color: hsl(var(--foreground)); }
+  .glass { background: hsl(var(--card) / 0.6); border: 1px solid hsl(var(--border)); backdrop-filter: blur(12px); }
+  .text-glow { text-shadow: 0 0 18px hsl(var(--primary) / 0.3); }
+  .thermal-grid {
+    background-image: linear-gradient(hsl(var(--primary)/0.05) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--primary)/0.05) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: hsl(var(--primary)/0.3); border-radius: 999px; }
+  .reveal { opacity: 0; transform: translateY(24px); transition: opacity .6s ease, transform .6s cubic-bezier(.22,1,.36,1); }
+  .reveal.in { opacity: 1; transform: none; }
+  @keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  .animate-marquee { animation: marquee 40s linear infinite; }
+  .animate-marquee:hover { animation-play-state: paused; }
+  #app { min-height: 100vh; }
+  .leaflet-container { background: #0a0f1a; }
+  .leaflet-popup-content-wrapper { background: #101827; color: #e5e7eb; }
+  .leaflet-popup-tip { background: #101827; }
+  a:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1 !important; transform: none !important; transition: none; }
+    .animate-marquee { animation: none; }
+  }
+</style>
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('tvg-theme');
+      if (t === 'light') document.documentElement.classList.remove('dark');
+      else document.documentElement.classList.add('dark');
+    } catch (e) { document.documentElement.classList.add('dark'); }
+  })();
+</script>
+</head>
+<body class="bg-background text-foreground">
+<div id="app"></div>
+
+<script>
+"use strict";
+/* ======================= ThermoVision Guard AI — standalone app ======================= */
+
+/* ---------- storage shim: file:// origins throw on localStorage in some browsers ---------- */
+var _mem = {}, _smem = {};
+var LS = {
+  get: function (k) { try { return localStorage.getItem(k); } catch (e) { return _mem.hasOwnProperty(k) ? _mem[k] : null; } },
+  set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { _mem[k] = v; } },
+  del: function (k) { try { localStorage.removeItem(k); } catch (e) { delete _mem[k]; } }
+};
+var SS = {
+  get: function (k) { try { return sessionStorage.getItem(k); } catch (e) { return _smem.hasOwnProperty(k) ? _smem[k] : null; } },
+  set: function (k, v) { try { sessionStorage.setItem(k, v); } catch (e) { _smem[k] = v; } }
+};
+
+const LOGO_DARK = "https://media.base44.com/images/public/user_695a0e94c8d26bdb49242b70/5291c1a0a_image.png";
+const LOGO_LIGHT = "https://media.base44.com/images/public/6a91e0661f577e048cd34423/107eb6958_WhatsAppImage2026-08-29at11930AM.jpeg";
+const FIRMS_KEY = "1058f4cfb255e4950c38e677e2f8ae7d";
+const LIVE_COLOR = "#22d3ee";
+const CC = {
+  "Industrial Fire": "#ff3b30",
+  "Wildfire": "#ff9500",
+  "Agricultural Burning": "#ffcc00",
+  "Unknown": "#8e8e93",
+  "Live Detection": "#22d3ee"
+};
+
+function isoHoursAgo(h) { return new Date(Date.now() - h * 3600e3).toISOString(); }
+
+const RAW = [
+  [21.63, 73.0, 342, 98, "Aqua", "Ankleshwar GIDC Chemical Plant", "Bharuch", "Gujarat", "Industrial Fire", 4, 2],
+  [20.37, 72.91, 336, 95, "Aqua", "Vapi Dyeing & Chemical Unit", "Valsad", "Gujarat", "Industrial Fire", 6, 5],
+  [19.21, 73.08, 349, 99, "Aqua", "Dombivli MIDC Petrochem Complex", "Thane", "Maharashtra", "Industrial Fire", 3, 1],
+  [11.11, 77.34, 321, 90, "Terra", "Tirupur Textile Dyeing Cluster", "Tiruppur", "Tamil Nadu", "Industrial Fire", 2, 8],
+  [24.2, 82.7, 356, 97, "Aqua", "Singrauli Thermal Power Plant", "Singrauli", "Madhya Pradesh", "Industrial Fire", 7, 3],
+  [17.68, 83.2, 343, 96, "Aqua", "Visakhapatnam Steel Plant", "Visakhapatnam", "Andhra Pradesh", "Industrial Fire", 5, 6],
+  [22.97, 72.65, 331, 92, "Aqua", "Vatva GIDC Industrial Estate", "Ahmedabad", "Gujarat", "Industrial Fire", 2, 11],
+  [30.7, 79.4, 312, 85, "Terra", "Corbett Tiger Reserve Forest", "Nainital", "Uttarakhand", "Wildfire", 1, 4],
+  [21.5, 84.0, 306, 80, "Terra", "Satkosia Forest Reserve", "Angul", "Odisha", "Wildfire", 1, 9],
+  [15.5, 74.0, 301, 78, "Terra", "Anshi Tiger Reserve", "Uttara Kannada", "Karnataka", "Wildfire", 1, 14],
+  [30.9, 75.85, 296, 75, "Terra", "Ludhiana Cropland Belt", "Ludhiana", "Punjab", "Agricultural Burning", 1, 7],
+  [29.15, 76.08, 291, 72, "Terra", "Karnal Paddy Fields", "Karnal", "Haryana", "Agricultural Burning", 1, 13],
+  [27.2, 71.5, 286, 60, "Terra", "Jaisalmer Desert Tract", "Jaisalmer", "Rajasthan", "Unknown", 0, 16],
+  [19.0, 72.8, 282, 55, "Terra", "Mumbai Offshore Zone", "Mumbai", "Maharashtra", "Unknown", 0, 19]
+];
+
+const MOCK = RAW.map(function (r, i) {
+  const risk = (r[8] === "Industrial Fire" && r[2] > 330 && r[9] >= 3) ? "High" : (r[2] > 345 ? "High" : (r[2] > 300 ? "Medium" : "Low"));
+  return {
+    id: "tvg-" + String(i + 1).padStart(3, "0"),
+    latitude: r[0], longitude: r[1], brightness: r[2], confidence: r[3],
+    satellite: r[4], detected_at: isoHoursAgo(r[10]), classification: r[8],
+    risk_level: risk, nearby_facility: r[5], district: r[6], state: r[7], persistence: r[9]
+  };
+});
+
+function classifyHotspot(o) {
+  const brightness = o.brightness || 0, confidence = o.confidence || 0, persistence = o.persistence || 0;
+  const u = String(o.nearbyLandUse || "").toLowerCase();
+  let classification = "Unknown";
+  if (/(industrial|factory|manufactur|works|plant|refinery|chemical|warehouse)/.test(u)) classification = "Industrial Fire";
+  else if (/(forest|wood|reserve|national park|tiger|sanctuary)/.test(u)) classification = "Wildfire";
+  else if (/(farm|farmland|cropland|orchard|meadow|vineyard|paddy|agricultur)/.test(u)) classification = "Agricultural Burning";
+  const score = brightness / 500 + confidence / 100 + persistence * 0.12;
+  let risk_level = "Low";
+  if (classification === "Industrial Fire" && brightness > 320 && persistence >= 2) risk_level = "High";
+  else if (brightness > 345 || score > 1.6) risk_level = "High";
+  else if (brightness > 300 || score > 1.2) risk_level = "Medium";
+  return { classification: classification, risk_level: risk_level, score: +score.toFixed(2) };
+}
+
+function alertText(h) {
+  const t = new Date(h.detected_at).toLocaleString("en-IN");
+  return [
+    "THERMAL ALERT — " + h.classification.toUpperCase() + " (" + h.risk_level + " RISK)",
+    "Source: NASA FIRMS / " + h.satellite,
+    "Location: " + h.nearby_facility + " — " + (h.district || "") + ", " + (h.state || "") + " (" + h.latitude.toFixed(4) + "\u00B0N, " + h.longitude.toFixed(4) + "\u00B0E)",
+    "Detected: " + t,
+    "Brightness: " + h.brightness + " K \u00B7 Confidence: " + h.confidence + "% \u00B7 Persistence: " + h.persistence + " scan(s)",
+    "",
+    "Summary: A thermal anomaly was detected near " + h.nearby_facility + ". OSM land-use cross-check classifies this as a likely " + h.classification.toLowerCase() + "."
+  ].join("\n");
+}
+
+/* ----------------------------- external data ----------------------------- */
+async function lookupLandUse(lat, lon, radius) {
+  radius = radius || 3000;
+  const q = "[out:json][timeout:25];("
+    + 'way["landuse"~"industrial|commercial|retail"](around:' + radius + "," + lat + "," + lon + ");"
+    + 'way["man_made"~"works|chimney|factory"](around:' + radius + "," + lat + "," + lon + ");"
+    + 'way["landuse"~"forest|farmland|orchard|meadow|vineyard|farmyard"](around:' + radius + "," + lat + "," + lon + ");"
+    + 'way["natural"="wood"](around:' + radius + "," + lat + "," + lon + ");"
+    + ");out tags center 20;";
+  try {
+    const res = await fetch("https://overpass-api.de/api/interpreter", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "data=" + encodeURIComponent(q)
+    });
+    const j = await res.json();
+    const els = j.elements || [];
+    if (!els.length) return { nearby_facility: "Unresolved area", landuse: "" };
+    let near = els[0], nd = Infinity;
+    for (const el of els) {
+      const c = el.center || { lat: lat, lon: lon };
+      const d = Math.hypot(c.lat - lat, c.lon - lon);
+      if (d < nd) { nd = d; near = el; }
+    }
+    const t = near.tags || {};
+    const name = t.name || t["name:en"] || "";
+    const lu = t.landuse || t.man_made || t.natural || t.industrial || "";
+    return { nearby_facility: name || (lu ? lu.replace(/_/g, " ") + " zone" : "Unnamed zone"), landuse: lu };
+  } catch (e) {
+    return { nearby_facility: "Lookup unavailable (network blocked)", landuse: "" };
+  }
+}
+
+function confNum(c) {
+  if (!c) return 50;
+  const s = String(c).toLowerCase();
+  if (s === "h") return 95;
+  if (s === "n") return 72;
+  if (s === "l") return 45;
+  const n = parseFloat(c);
+  return isNaN(n) ? 50 : n;
+}
+function riskB(b) { return b > 345 ? "High" : (b > 320 ? "Medium" : "Low"); }
+
+async function fetchFirms() {
+  const area = "68,8,97,37";
+  const sources = ["VIIRS_NOAA20_NRT", "MODIS_NRT"];
+  const proxy = function (u) { return "https://api.allorigins.win/raw?url=" + encodeURIComponent(u); };
+  const out = [];
+  for (const src of sources) {
+    const u = "https://firms.modaps.eosdis.nasa.gov/api/area/csv/" + FIRMS_KEY + "/" + src + "/" + area + "/1";
+    let text = "";
+    try {
+      const r = await fetch(u);
+      if (!r.ok) throw new Error("bad status");
+      text = await r.text();
+    } catch (e1) {
+      try { const r2 = await fetch(proxy(u)); text = await r2.text(); } catch (e2) { continue; }
+    }
+    const lines = String(text).trim().split("\n");
+    if (!lines.length || lines[0].indexOf("Invalid") === 0) continue;
+    const cols = lines[0].split(",");
+    const bIdx = cols.indexOf("bright_ti4") >= 0 ? cols.indexOf("bright_ti4") : cols.indexOf("brightness");
+    if (bIdx < 0) continue;
+    for (let i = 1; i < lines.length; i++) {
+      const c = lines[i].split(",");
+      if (c.length < 10) continue;
+      const lat = parseFloat(c[0]), lon = parseFloat(c[1]);
+      if (isNaN(lat) || isNaN(lon)) continue;
+      const b = parseFloat(c[bIdx]) || 0;
+      const t = String(c[6]).padStart(4, "0");
+      out.push({
+        id: "live-" + src + "-" + i, latitude: lat, longitude: lon, brightness: b,
+        confidence: confNum(c[9]), satellite: c[7] || src,
+        detected_at: c[5] + "T" + t.slice(0, 2) + ":" + t.slice(2, 4) + ":00Z",
+        classification: "Live Detection", risk_level: riskB(b),
+        nearby_facility: "Pending OSM cross-check", district: "", state: "", persistence: 1, live: true
+      });
+    }
+  }
+  return out;
+}
+
+function repeatOffenders() {
+  const m = {};
+  for (const h of MOCK) {
+    if (h.classification !== "Industrial Fire") continue;
+    if (!m[h.nearby_facility]) {
+      m[h.nearby_facility] = {
+        facility: h.nearby_facility, district: h.district, state: h.state,
+        count: 0, maxBrightness: 0, lastSeen: h.detected_at, lat: h.latitude, lon: h.longitude, ids: []
+      };
+    }
+    m[h.nearby_facility].count += h.persistence;
+    m[h.nearby_facility].ids.push(h.id);
+    m[h.nearby_facility].maxBrightness = Math.max(m[h.nearby_facility].maxBrightness, h.brightness);
+  }
+  return Object.keys(m).map(function (k) {
+    const f = m[k];
+    f.riskScore = Math.min(100, f.count * 12 + (f.maxBrightness > 340 ? 20 : 0));
+    return f;
+  }).sort(function (a, b) { return b.riskScore - a.riskScore; });
+}
+
+/* ----------------------------- state ----------------------------- */
+const state = { route: location.hash || "#/", live: [], liveLoading: false, showLive: true, tile: "dark", map: null, imap: null, charts: {} };
+let alerts = MOCK.slice(0, 6).map(function (h) {
+  return { id: "a" + h.id, hotspot_id: h.id, alert_text: alertText(h), classification: h.classification, risk_level: h.risk_level, nearby_facility: h.nearby_facility, created_date: h.detected_at };
+});
+let reports = [];
+let feedback = [];
+
+function user() { try { return JSON.parse(LS.get("tvg_user") || "null"); } catch (e) { return null; } }
+function login(email) { LS.set("tvg_user", JSON.stringify({ email: email, full_name: email.split("@")[0], role: "official" })); }
+function logout() { LS.del("tvg_user"); location.hash = "#/login"; render(); }
+
+function isDark() { return document.documentElement.classList.contains("dark"); }
+function logoUrl() { return isDark() ? LOGO_DARK : LOGO_LIGHT; }
+function toggleTheme() {
+  const next = !isDark();
+  document.documentElement.classList.toggle("dark", next);
+  LS.set("tvg-theme", next ? "dark" : "light");
+  render();
+}
+
+function esc(s) {
+  return String(s === null || s === undefined ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+function time(s) { try { return new Date(s).toLocaleString("en-IN"); } catch (e) { return String(s); } }
+
+function observeReveals() {
+  const els = document.querySelectorAll(".reveal:not(.in)");
+  if (!("IntersectionObserver" in window)) {
+    els.forEach(function (el) { el.classList.add("in"); });
+    return;
+  }
+  const io = new IntersectionObserver(function (ents) {
+    ents.forEach(function (en) { if (en.isIntersecting) { en.target.classList.add("in"); io.unobserve(en.target); } });
+  }, { rootMargin: "0px 0px -60px 0px" });
+  els.forEach(function (el) { io.observe(el); });
+  setTimeout(function () {
+    document.querySelectorAll(".reveal:not(.in)").forEach(function (el) {
+      if (el.getBoundingClientRect().top < window.innerHeight) el.classList.add("in");
+    });
+  }, 300);
+}
+
+/* ----------------------------- chrome ----------------------------- */
+function navLinks() {
+  return [
+    ["#/dashboard", "Dashboard"], ["#/map", "Live Map"], ["#/alerts", "Alerts"],
+    ["#/analytics", "Analytics"], ["#/investigate", "Investigate"],
+    ["#/high-risk", "High-Risk"], ["#/reports", "Reports"]
+  ];
+}
+
+function brandMark(size, sub) {
+  return '<img src="' + logoUrl() + '" alt="ThermoVision Guard AI" class="' + size + ' rounded-lg object-cover"/>'
+    + '<div class="leading-tight"><div class="text-sm font-extrabold tracking-tight"><span class="text-primary">THERMO</span><span class="text-foreground">VISION</span></div>'
+    + '<div class="text-[9px] font-semibold tracking-[0.3em] text-muted-foreground">' + (sub || "GUARD AI") + "</div></div>";
+}
+
+function navbar() {
+  const u = user();
+  const links = navLinks().map(function (p) {
+    const active = state.route === p[0] || (p[0] !== "#/dashboard" && state.route.indexOf(p[0]) === 0);
+    return '<a href="' + p[0] + '" class="px-3 py-2 rounded-lg text-sm font-medium transition ' + (active ? "text-primary" : "text-muted-foreground hover:text-foreground") + '">' + p[1] + "</a>";
+  }).join("");
+
+  const right = u
+    ? '<a href="#/settings" class="hidden sm:flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-secondary text-muted-foreground hover:text-foreground">\u2699</a>'
+      + '<button type="button" data-act="logout" class="hidden sm:flex h-9 items-center gap-1.5 rounded-lg border border-border bg-secondary px-3 text-sm text-muted-foreground hover:text-foreground">Sign out</button>'
+    : '<a href="#/login" class="hidden sm:block text-sm text-muted-foreground hover:text-foreground">Log in</a>'
+      + '<a href="#/register" class="hidden sm:block rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">Get started</a>';
+
+  const mobileRight = u
+    ? '<a href="#/settings" class="px-3 py-2.5 rounded-lg text-sm text-muted-foreground hover:text-foreground">Settings</a>'
+      + '<button type="button" data-act="logout" class="px-3 py-2.5 rounded-lg text-sm text-muted-foreground hover:text-foreground text-left">Sign out</button>'
+    : '<a href="#/login" class="px-3 py-2.5 rounded-lg text-sm text-muted-foreground hover:text-foreground">Log in</a>'
+      + '<a href="#/register" class="px-3 py-2.5 rounded-lg text-sm text-primary">Get started</a>';
+
+  return '<header class="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur-xl">'
+    + '<div class="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">'
+    + '<a href="#/" class="flex items-center gap-2.5">' + brandMark("h-9 w-9") + "</a>"
+    + '<nav class="hidden lg:flex items-center gap-0.5">' + links + "</nav>"
+    + '<div class="flex items-center gap-2">'
+    + '<button type="button" data-act="theme" title="Switch theme" class="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-secondary text-muted-foreground hover:text-foreground">' + (isDark() ? "\u2600" : "\u263E") + "</button>"
+    + right
+    + '<button type="button" data-act="mnav" class="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-secondary text-muted-foreground lg:hidden">\u2630</button>'
+    + "</div></div>"
+    + '<div id="mnav" class="hidden border-t border-border bg-background lg:hidden"><nav class="mx-auto grid max-w-7xl gap-1 px-4 py-3">'
+    + navLinks().map(function (p) { return '<a href="' + p[0] + '" class="px-3 py-2.5 rounded-lg text-sm text-muted-foreground hover:text-foreground">' + p[1] + "</a>"; }).join("")
+    + mobileRight + "</nav></div></header>";
+}
+
+function shell(inner) {
+  return '<div class="min-h-screen bg-background">' + navbar()
+    + '<main class="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">' + inner + "</main></div>";
+}
+
+function pageHead(eyebrow, title, sub) {
+  return '<div><p class="text-xs font-semibold uppercase tracking-[0.3em] text-primary">' + eyebrow + "</p>"
+    + '<h1 class="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">' + title + "</h1>"
+    + (sub ? '<p class="mt-1 text-sm text-muted-foreground">' + sub + "</p>" : "") + "</div>";
+}
+
+/* ----------------------------- splash ----------------------------- */
+function splashHTML() {
+  return '<div id="splash" class="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-background">'
+    + '<div class="thermal-grid absolute inset-0 opacity-30"></div>'
+    + '<div class="relative flex flex-col items-center">'
+    + '<img src="' + logoUrl() + '" alt="" class="h-24 w-24 rounded-lg object-cover"/>'
+    + '<h1 class="mt-6 text-2xl font-extrabold tracking-tight"><span class="text-primary text-glow">THERMO</span><span class="text-foreground">VISION</span></h1>'
+    + '<p class="mt-1 text-[11px] font-semibold tracking-[0.4em] text-muted-foreground">GUARD AI</p>'
+    + '<p class="mt-4 max-w-xs text-center text-xs text-muted-foreground">Turning satellite thermal signals into smart fire intelligence</p>'
+    + '<div class="mt-8 h-1 w-56 overflow-hidden rounded-full bg-secondary"><div id="spbar" class="h-full rounded-full bg-primary" style="width:0%"></div></div>'
+    + '<p id="sptxt" class="mt-3 text-[11px] text-muted-foreground">Starting the satellite thermal feed\u2026</p>'
+    + "</div></div>";
+}
+function runSplash() {
+  const start = Date.now(), dur = 2600;
+  const iv = setInterval(function () {
+    const p = Math.min(100, ((Date.now() - start) / dur) * 100);
+    const bar = document.getElementById("spbar"), txt = document.getElementById("sptxt");
+    if (bar) bar.style.width = p + "%";
+    if (txt) txt.textContent = p < 100 ? "Starting the satellite thermal feed\u2026" : "Ready";
+    if (p >= 100) { clearInterval(iv); SS.set("tvg_splashed", "1"); render(); }
+  }, 40);
+}
+
+/* ----------------------------- landing ----------------------------- */
+function landing() {
+  const u = user();
+  const feats = [
+    ["https://images.unsplash.com/photo-1497436072909-60f360e1d4b1?auto=format&fit=crop&w=600&q=80", "Live thermal map", "Colour-coded satellite hotspots across India."],
+    ["https://images.unsplash.com/photo-1486870591958-9b9d0d1dda99?auto=format&fit=crop&w=600&q=80", "Automatic classification", "Industrial, wildfire, agricultural or unknown."],
+    ["https://images.unsplash.com/photo-1454789548928-9efd52dc4031?auto=format&fit=crop&w=600&q=80", "NASA FIRMS feed", "Satellite thermal anomalies, ingested continuously."],
+    ["https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=600&q=80", "Plain-language alerts", "Incident summaries written for the field, not the lab."],
+    ["https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=600&q=80", "Repeat-offender tracking", "Sites flagged again and again rise to a watchlist."],
+    ["https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=600&q=80", "One-click PDF reports", "Timestamped incident reports for compliance files."]
+  ];
+  const steps = [
+    ["https://images.unsplash.com/photo-1454789548928-9efd52dc4031?auto=format&fit=crop&w=800&q=80", "Ingest", "NASA FIRMS satellite thermal anomalies, refreshed every few hours."],
+    ["https://images.unsplash.com/photo-1497436072909-60f360e1d4b1?auto=format&fit=crop&w=800&q=80", "Cross-reference", "OpenStreetMap land use within 3 km locates the likely source."],
+    ["https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80", "Classify", "Industrial fire \u00B7 wildfire \u00B7 agricultural burning \u00B7 unknown."],
+    ["https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=800&q=80", "Report", "Generated alerts and downloadable incident PDFs."]
+  ];
+  const carousel = feats.concat(feats).map(function (f) {
+    return '<div class="relative w-72 shrink-0 overflow-hidden rounded-2xl border border-border bg-card">'
+      + '<div class="relative h-40 overflow-hidden"><img src="' + f[0] + '" alt="" class="h-full w-full object-cover" onerror="this.style.display=&quot;none&quot;"/>'
+      + '<div class="absolute inset-0 bg-gradient-to-t from-card to-transparent"></div></div>'
+      + '<div class="p-4"><h3 class="font-semibold">' + f[1] + '</h3><p class="mt-1 text-sm text-muted-foreground">' + f[2] + "</p></div></div>";
+  }).join("");
+  const stepsHTML = steps.map(function (s, i) {
+    return '<div class="reveal overflow-hidden rounded-2xl border border-border bg-card" style="transition-delay:' + (i * 80) + 'ms">'
+      + '<div class="relative h-36 overflow-hidden"><img src="' + s[0] + '" alt="" class="h-full w-full object-cover" onerror="this.style.display=&quot;none&quot;"/>'
+      + '<div class="absolute inset-0 bg-gradient-to-t from-card via-card/40 to-transparent"></div>'
+      + '<span class="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-background/80 text-sm font-bold text-primary">' + (i + 1) + "</span></div>"
+      + '<div class="p-5"><h3 class="font-semibold">' + s[1] + '</h3><p class="mt-2 text-sm text-muted-foreground">' + s[2] + "</p></div></div>";
+  }).join("");
+
+  return '<div class="min-h-screen bg-background text-foreground">' + navbar()
+    + '<section class="relative overflow-hidden"><div class="absolute inset-0">'
+    + '<img src="https://images.unsplash.com/photo-1497436072909-60f360e1d4b1?auto=format&fit=crop&w=1920&q=80" alt="" class="h-full w-full object-cover opacity-60" onerror="this.style.display=&quot;none&quot;"/>'
+    + '<div class="absolute inset-0 bg-gradient-to-b from-background/40 via-background/55 to-background"></div>'
+    + '<div class="absolute inset-0 thermal-grid opacity-30"></div></div>'
+    + '<div class="relative mx-auto max-w-4xl px-6 pb-24 pt-20 text-center sm:pt-28">'
+    + '<div class="mx-auto mb-6 inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-4 py-1.5 text-xs font-medium text-primary">\uD83D\uDEF0 Satellite thermal intelligence</div>'
+    + '<h1 class="text-4xl font-extrabold leading-tight tracking-tight sm:text-6xl">Turning satellite thermal signals<br/>into <span class="text-primary">smart fire intelligence</span></h1>'
+    + '<p class="mx-auto mt-6 max-w-2xl text-base text-muted-foreground sm:text-lg">ThermoVision Guard AI joins NASA FIRMS satellite feeds to OpenStreetMap land-use data to detect, classify and report industrial fires and persistent thermal sources \u2014 around the clock, at national scale.</p>'
+    + '<div class="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">'
+    + '<a href="#/register" class="inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-base font-semibold text-primary-foreground hover:opacity-90">Get started \u2192</a>'
+    + '<a href="#/login" class="inline-flex items-center gap-2 rounded-xl border border-border bg-secondary px-6 py-3 text-base font-semibold text-foreground hover:bg-secondary/70">\uD83D\uDEE1 Official login</a>'
+    + (u ? '<a href="#/dashboard" class="text-sm font-medium text-primary hover:underline">Go to dashboard \u2192</a>' : "")
+    + "</div></div></section>"
+    + '<section class="mx-auto max-w-5xl px-6 py-16"><div class="reveal glass rounded-2xl p-8 text-center">'
+    + '<p class="text-xs font-semibold uppercase tracking-[0.3em] text-primary">The problem</p>'
+    + '<h2 class="mx-auto mt-3 max-w-2xl text-2xl font-bold tracking-tight sm:text-3xl">Industrial fires burn in the blind spot of every pollution board</h2>'
+    + '<p class="mx-auto mt-4 max-w-2xl text-muted-foreground">Fires run for hours before anyone reports them, repeat offenders go untracked, and manual patrols cannot cover thousands of remote sites. Continuous satellite monitoring closes that gap.</p></div></section>'
+    + '<section class="py-12"><div class="mx-auto max-w-7xl px-6"><h2 class="reveal text-center text-2xl font-bold tracking-tight sm:text-3xl">One platform for thermal intelligence</h2></div>'
+    + '<div class="relative mt-10 overflow-hidden"><div class="flex w-max animate-marquee gap-5 px-6">' + carousel + "</div></div></section>"
+    + '<section class="mx-auto max-w-7xl px-6 py-16"><h2 class="reveal text-center text-2xl font-bold tracking-tight sm:text-3xl">How it works</h2>'
+    + '<div class="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">' + stepsHTML + "</div></section>"
+    + '<section class="relative overflow-hidden px-6 py-20"><div class="absolute inset-0 bg-gradient-to-r from-primary/10 to-transparent"></div>'
+    + '<div class="relative mx-auto max-w-3xl text-center"><div class="reveal"><h2 class="text-3xl font-bold tracking-tight sm:text-4xl">See the heat map of India</h2>'
+    + '<p class="mx-auto mt-4 max-w-xl text-muted-foreground">Open the live thermal dashboard and explore active hotspots as they are detected.</p>'
+    + '<a href="#/register" class="mt-8 inline-flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-base font-semibold text-primary-foreground hover:opacity-90">Get started \u2192</a></div></div></section>'
+    + '<footer class="border-t border-border px-6 py-8 text-center text-sm text-muted-foreground">ThermoVision Guard AI \u2014 smart fire intelligence</footer></div>';
+}
+
+/* ----------------------------- auth ----------------------------- */
+function authPage(mode) {
+  const isLogin = mode === "login";
+  return '<div class="min-h-screen bg-background lg:grid lg:grid-cols-2">'
+    + '<div class="relative hidden overflow-hidden bg-gradient-to-br from-background via-background to-secondary lg:block">'
+    + '<img src="https://images.unsplash.com/photo-1497436072909-60f360e1d4b1?auto=format&fit=crop&w=1200&q=80" alt="" class="absolute inset-0 h-full w-full object-cover opacity-50" onerror="this.style.display=&quot;none&quot;"/>'
+    + '<div class="absolute inset-0 bg-gradient-to-br from-background/60 via-background/80 to-background"></div>'
+    + '<div class="absolute inset-0 thermal-grid opacity-30"></div>'
+    + '<div class="relative flex h-full flex-col justify-between p-12">'
+    + '<a href="#/" class="flex items-center gap-3">' + brandMark("h-11 w-11") + "</a>"
+    + '<div><div class="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">\uD83D\uDD25 Satellite thermal intelligence</div>'
+    + '<h2 class="mt-5 max-w-md text-3xl font-bold leading-tight tracking-tight">Turning satellite thermal signals into smart fire intelligence</h2>'
+    + '<p class="mt-4 max-w-md text-sm text-muted-foreground">Continuous detection, classification and reporting of industrial fires and persistent thermal sources, at national scale.</p></div>'
+    + '<p class="text-xs text-muted-foreground">ThermoVision Guard AI</p></div></div>'
+    + '<div class="relative flex min-h-screen items-center justify-center px-4 py-10 sm:px-8">'
+    + '<div class="absolute right-4 top-4 sm:right-8 sm:top-8"><button type="button" data-act="theme" class="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-secondary text-muted-foreground hover:text-foreground">' + (isDark() ? "\u2600" : "\u263E") + "</button></div>"
+    + '<div class="w-full max-w-md">'
+    + '<div class="mb-8 flex items-center justify-center gap-3 lg:hidden">' + brandMark("h-12 w-12") + "</div>"
+    + '<h1 class="text-center text-2xl font-bold tracking-tight sm:text-3xl">' + (isLogin ? "Welcome back" : "Create your account") + "</h1>"
+    + '<p class="mt-2 text-center text-sm text-muted-foreground">' + (isLogin ? "Log in to continue" : "Sign up to get started") + "</p>"
+    + '<div id="autherr" class="mt-4 hidden rounded-lg bg-destructive/10 p-3 text-sm text-destructive"></div>'
+    + '<form id="authform" data-mode="' + (isLogin ? "login" : "register") + '" class="mt-6 space-y-4" novalidate>'
+    + '<div><label for="email" class="mb-1.5 block text-sm font-medium">Email</label><input id="email" type="email" required placeholder="you@example.com" class="w-full rounded-lg border border-border bg-secondary px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary/50"/></div>'
+    + '<div><label for="password" class="mb-1.5 block text-sm font-medium">Password</label><input id="password" type="password" required placeholder="At least 6 characters" class="w-full rounded-lg border border-border bg-secondary px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary/50"/></div>'
+    + (isLogin ? "" : '<div><label for="confirm" class="mb-1.5 block text-sm font-medium">Confirm password</label><input id="confirm" type="password" required placeholder="Repeat your password" class="w-full rounded-lg border border-border bg-secondary px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary/50"/></div>')
+    + '<button type="submit" class="w-full rounded-lg bg-primary py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90">' + (isLogin ? "Log in" : "Create account") + "</button></form>"
+    + '<p class="mt-6 text-center text-sm text-muted-foreground">'
+    + (isLogin ? 'No account yet? <a href="#/register" class="text-primary font-medium">Create one</a>' : 'Already have an account? <a href="#/login" class="text-primary font-medium">Log in</a>')
+    + "</p></div></div></div>";
+}
+
+function doAuth(form) {
+  const isLogin = form.dataset.mode === "login";
+  const email = (document.getElementById("email").value || "").trim();
+  const pw = document.getElementById("password").value || "";
+  const err = document.getElementById("autherr");
+  function fail(msg) { err.textContent = msg; err.classList.remove("hidden"); }
+  if (!/^\S+@\S+\.\S+$/.test(email)) return fail("Enter a valid email address.");
+  if (pw.length < 6) return fail("Passwords need at least 6 characters.");
+  if (!isLogin && pw !== (document.getElementById("confirm").value || "")) return fail("The two passwords do not match.");
+  login(email);
+  location.hash = "#/dashboard";
+  render();
+}
+
+/* ----------------------------- dashboard ----------------------------- */
+function statCard(label, value, accent, sub) {
+  return '<div class="glass relative overflow-hidden rounded-2xl p-5">'
+    + '<div class="pointer-events-none absolute -right-8 -top-8 h-28 w-28 rounded-full opacity-20 blur-2xl" style="background:' + accent + '"></div>'
+    + '<p class="text-xs font-medium uppercase tracking-wider text-muted-foreground">' + label + "</p>"
+    + '<p class="mt-2 text-3xl font-extrabold text-foreground">' + value + "</p>"
+    + '<p class="mt-1 text-xs text-muted-foreground">' + (sub || "") + "</p></div>";
+}
+
+function dashboard() {
+  const active = MOCK.length;
+  const ind = MOCK.filter(function (h) { return h.classification === "Industrial Fire"; }).length;
+  const high = MOCK.filter(function (h) { return h.risk_level === "High"; }).length;
+  const persist = MOCK.filter(function (h) { return h.persistence >= 3; }).length;
+  const recent = MOCK.slice().sort(function (a, b) { return new Date(b.detected_at) - new Date(a.detected_at); }).slice(0, 6);
+  const offenders = repeatOffenders().slice(0, 5);
+
+  const recentHTML = recent.map(function (h) {
+    const c = CC[h.classification];
+    return '<a href="#/hotspot/' + h.id + '" class="flex items-center gap-3 rounded-xl border border-border bg-secondary/50 p-3 hover:border-primary/30 hover:bg-secondary">'
+      + '<span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background:' + c + ";box-shadow:0 0 12px " + c + '"></span>'
+      + '<div class="min-w-0 flex-1"><p class="truncate text-sm font-medium text-foreground">' + esc(h.nearby_facility) + "</p>"
+      + '<p class="truncate text-xs text-muted-foreground">' + esc(h.district) + ", " + esc(h.state) + " \u00B7 " + esc(h.classification) + "</p></div>"
+      + '<div class="text-right"><p class="text-sm font-semibold text-foreground">' + h.brightness + "K</p>"
+      + '<p class="text-[11px] text-muted-foreground">' + h.confidence + "%</p></div></a>";
+  }).join("");
+
+  const offHTML = offenders.map(function (f) {
+    return '<div class="rounded-xl border border-border bg-secondary/50 p-3">'
+      + '<div class="flex items-center justify-between"><p class="truncate text-sm font-medium text-foreground">' + esc(f.facility) + "</p>"
+      + '<span class="ml-2 shrink-0 rounded-md bg-primary/15 px-2 py-0.5 text-xs font-bold text-primary">' + f.riskScore + "</span></div>"
+      + '<div class="mt-1 flex items-center justify-between text-xs text-muted-foreground"><span>' + esc(f.district) + ", " + esc(f.state) + "</span><span>" + f.count + " flags</span></div>"
+      + '<div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-secondary"><div class="h-full rounded-full" style="width:' + f.riskScore + '%;background:linear-gradient(90deg,#ff6600,#ff3b30)"></div></div></div>';
+  }).join("");
+
+  return shell('<div class="space-y-8">'
+    + pageHead("Live operations", "Thermal intelligence dashboard", "National view of satellite-detected fire and thermal anomalies.")
+    + '<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">'
+    + statCard("Active hotspots", active, "#ff3b30", "Across all sources")
+    + statCard("Industrial alerts", ind, "#ff6600", "Near factory land use")
+    + statCard("High-risk zones", high, "#ff9500", "Brightness and persistence")
+    + statCard("Persistent sources", persist, "#ffcc00", "Three or more scans")
+    + "</div>"
+    + '<div class="grid gap-6 lg:grid-cols-3">'
+    + '<div class="glass rounded-2xl p-5 lg:col-span-2"><h2 class="mb-4 text-lg font-semibold">Recent detections</h2><div class="space-y-2">' + recentHTML + "</div></div>"
+    + '<div class="glass rounded-2xl p-5"><h2 class="mb-4 text-lg font-semibold">Repeat offenders</h2><div class="space-y-3">' + offHTML + "</div></div>"
+    + "</div></div>");
+}
+
+/* ----------------------------- map ----------------------------- */
+function mapPage() {
+  const legend = Object.keys(CC).map(function (k) {
+    return '<div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full" style="background:' + CC[k] + '"></span><span class="text-xs text-foreground/80">' + k + "</span></div>";
+  }).join("");
+
+  return shell('<div class="space-y-5">'
+    + pageHead("Real-time monitoring", "Live thermal hotspot map")
+    + '<div class="grid gap-5 lg:grid-cols-[320px_1fr]">'
+    + '<div class="glass flex max-h-[78vh] flex-col rounded-2xl p-4">'
+    + '<div class="mb-3 flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2"><span class="text-primary">\uD83D\uDCE1</span>'
+    + '<div class="flex-1"><p class="text-xs font-semibold text-foreground">Live NASA FIRMS</p><p id="livestatus" class="text-[11px] text-muted-foreground">Fetching satellite detections\u2026</p></div></div>'
+    + '<div class="flex-1 space-y-2 overflow-y-auto scrollbar-thin pr-1" id="hotlist"></div></div>'
+    + '<div class="relative overflow-hidden rounded-2xl border border-border"><div id="leaflet" style="height:78vh;width:100%"></div>'
+    + '<div class="absolute right-3 top-3 z-[1000] glass flex items-center gap-1 rounded-lg p-1" id="tiletoggle"></div>'
+    + '<div class="absolute right-3 top-14 z-[1000] glass flex items-center gap-2 rounded-lg px-3 py-2">'
+    + '<span id="livepill" class="flex items-center gap-1.5 text-xs font-semibold" style="color:' + LIVE_COLOR + '"><span class="h-2 w-2 rounded-full" style="background:' + LIVE_COLOR + '"></span>Live 0</span>'
+    + '<button type="button" data-act="toggle-live" title="Show or hide live detections" class="text-muted-foreground hover:text-foreground">\uD83D\uDC41</button>'
+    + '<button type="button" data-act="reload-live" title="Refresh live feed" class="text-muted-foreground hover:text-foreground">\u21BB</button></div>'
+    + '<div class="absolute bottom-4 left-4 z-[1000] glass rounded-xl p-3"><p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Classification</p><div class="space-y-1.5">' + legend + "</div></div>"
+    + "</div></div></div>");
+}
+
+const TILES = {
+  dark: ["https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", "&copy; CARTO"],
+  satellite: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", "Esri"],
+  streets: ["https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", "&copy; OpenStreetMap"]
+};
+
+function initMap() {
+  const holder = document.getElementById("leaflet");
+  if (!holder || typeof L === "undefined") return;
+
+  const tt = document.getElementById("tiletoggle");
+  if (tt) {
+    tt.innerHTML = Object.keys(TILES).map(function (k) {
+      return '<button type="button" data-act="tile" data-tile="' + k + '" class="px-2.5 py-1.5 rounded-md text-xs font-medium ' + (state.tile === k ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground") + '">' + k + "</button>";
+    }).join("");
+  }
+
+  if (state.map) { try { state.map.remove(); } catch (e) {} state.map = null; }
+  state.map = L.map("leaflet", { scrollWheelZoom: true }).setView([22.5, 79], 5);
+  L.tileLayer(TILES[state.tile][0], { attribution: TILES[state.tile][1], maxZoom: 18 }).addTo(state.map);
+  setTimeout(function () { if (state.map) state.map.invalidateSize(); }, 120);
+
+  drawMapMarkers();
+
+  const list = document.getElementById("hotlist");
+  if (list) {
+    list.innerHTML = MOCK.map(function (h) {
+      const c = CC[h.classification];
+      return '<a href="#/hotspot/' + h.id + '" class="block rounded-xl border border-border bg-secondary/50 p-3 hover:border-primary/30 hover:bg-secondary">'
+        + '<div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full" style="background:' + c + ";box-shadow:0 0 10px " + c + '"></span>'
+        + '<p class="truncate text-sm font-medium text-foreground">' + esc(h.nearby_facility) + "</p></div>"
+        + '<p class="mt-1 text-xs text-muted-foreground">' + esc(h.district) + ", " + esc(h.state) + "</p>"
+        + '<div class="mt-2 flex items-center justify-between text-[11px]"><span class="text-muted-foreground">' + h.brightness + "K \u00B7 " + h.confidence + "%</span>"
+        + '<span class="rounded px-1.5 py-0.5 font-semibold" style="background:' + c + "22;color:" + c + '">' + h.risk_level + "</span></div></a>";
+    }).join("");
+  }
+
+  if (!state.live.length && !state.liveLoading) reloadLive();
+}
+
+function drawMapMarkers() {
+  if (!state.map) return;
+  state.map.eachLayer(function (l) { if (l instanceof L.CircleMarker) state.map.removeLayer(l); });
+
+  MOCK.forEach(function (h) {
+    const c = CC[h.classification];
+    const popup = '<div style="min-width:200px">'
+      + '<p style="font-weight:600;color:#ff6600;margin:0">' + esc(h.classification) + "</p>"
+      + '<p style="margin:2px 0;font-weight:500">' + esc(h.nearby_facility) + "</p>"
+      + '<p style="margin:0;font-size:12px;opacity:.7">' + esc(h.district) + ", " + esc(h.state) + "</p>"
+      + '<p style="margin:6px 0 0;font-size:12px">Brightness <b>' + h.brightness + "K</b> \u00B7 Confidence <b>" + h.confidence + "%</b></p>"
+      + '<a href="#/hotspot/' + h.id + '" style="display:inline-block;margin-top:8px;font-size:12px;font-weight:600;color:#ff6600">View details \u2192</a></div>';
+    L.circleMarker([h.latitude, h.longitude], {
+      radius: Math.max(6, h.brightness / 40), color: c, fillColor: c, fillOpacity: 0.6, weight: 1.5
+    }).bindPopup(popup).addTo(state.map);
+  });
+
+  if (state.showLive) {
+    state.live.forEach(function (h) {
+      const popup = '<div style="min-width:210px">'
+        + '<p style="font-weight:600;color:' + LIVE_COLOR + ';margin:0">\u25CF Live NASA FIRMS detection</p>'
+        + '<p style="margin:2px 0;font-size:12px;opacity:.7">' + h.latitude.toFixed(4) + "\u00B0N, " + h.longitude.toFixed(4) + "\u00B0E</p>"
+        + '<p style="margin:6px 0 0;font-size:12px">Brightness <b>' + h.brightness + "K</b> \u00B7 Confidence <b>" + h.confidence + "%</b></p>"
+        + '<p style="margin:0;font-size:12px">Satellite: ' + esc(h.satellite) + "</p></div>";
+      L.circleMarker([h.latitude, h.longitude], {
+        radius: Math.max(5, h.brightness / 50), color: LIVE_COLOR, fillColor: LIVE_COLOR, fillOpacity: 0.55, weight: 1.5
+      }).bindPopup(popup).addTo(state.map);
+    });
+  }
+}
+
+function reloadLive() {
+  state.liveLoading = true;
+  const pill = document.getElementById("livepill");
+  if (pill) pill.innerHTML = '<span class="h-2 w-2 rounded-full" style="background:' + LIVE_COLOR + '"></span> Loading\u2026';
+  fetchFirms().then(function (d) {
+    state.live = d;
+    state.liveLoading = false;
+    const p = document.getElementById("livepill");
+    if (p) p.innerHTML = '<span class="h-2 w-2 rounded-full" style="background:' + LIVE_COLOR + '"></span> Live ' + d.length;
+    const s = document.getElementById("livestatus");
+    if (s) s.textContent = d.length ? (d.length + " live detections in the last 24 hours") : "No live feed right now. Showing the sample dataset. Open this page over http:// for the FIRMS API.";
+    drawMapMarkers();
+  }).catch(function () {
+    state.liveLoading = false;
+    const s = document.getElementById("livestatus");
+    if (s) s.textContent = "Live feed unreachable. Showing the sample dataset.";
+    const p = document.getElementById("livepill");
+    if (p) p.innerHTML = '<span class="h-2 w-2 rounded-full" style="background:' + LIVE_COLOR + '"></span> Live 0';
+  });
+}
+
+/* ----------------------------- hotspot detail ----------------------------- */
+function hotspotPage(id) {
+  const h = MOCK.filter(function (x) { return x.id === id; })[0];
+  if (!h) {
+    return shell('<div class="py-20 text-center"><p class="text-muted-foreground">That hotspot is not in the current dataset.</p><a href="#/map" class="mt-3 inline-block text-primary">Back to the map</a></div>');
+  }
+  const fb = feedback.filter(function (f) { return f.hotspot_id === id; });
+  const color = CC[h.classification];
+
+  const facts = [
+    ["Satellite source", "NASA FIRMS \u00B7 " + h.satellite],
+    ["Brightness", h.brightness + " K"],
+    ["Confidence", h.confidence + "%"],
+    ["Detected at", time(h.detected_at)],
+    ["Nearby facility", h.nearby_facility],
+    ["Persistence", h.persistence + " scan(s)"]
+  ].map(function (d) {
+    return '<div class="flex items-center gap-3 rounded-xl border border-border bg-secondary/50 p-3"><div class="flex-1">'
+      + '<p class="text-xs text-muted-foreground">' + d[0] + "</p>"
+      + '<p class="text-sm font-medium text-foreground">' + esc(d[1]) + "</p></div></div>";
+  }).join("");
+
+  const log = fb.length
+    ? fb.map(function (f) {
+        return '<div class="flex items-center justify-between gap-2 rounded-lg border border-border bg-secondary/50 p-2.5">'
+          + '<span class="text-xs">' + (f.status === "confirmed" ? "\u2713 Confirmed fire" : "\u2715 False alarm") + "</span>"
+          + '<span class="text-[11px] text-muted-foreground">' + time(f.created_date) + "</span></div>";
+      }).join("")
+    : '<p class="text-xs text-muted-foreground">Nothing verified yet. Confirm or dismiss above.</p>';
+
+  return shell('<div class="space-y-6">'
+    + '<a href="#/map" class="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">\u2190 Back to the map</a>'
+    + '<div class="relative overflow-hidden rounded-2xl border border-border p-6" style="background:linear-gradient(135deg,' + color + '1a,transparent 60%)">'
+    + '<div class="flex flex-wrap items-start justify-between gap-4"><div>'
+    + '<div class="flex flex-wrap items-center gap-2"><span class="h-3 w-3 rounded-full" style="background:' + color + ";box-shadow:0 0 14px " + color + '"></span>'
+    + '<span class="text-sm font-semibold" style="color:' + color + '">' + esc(h.classification) + "</span>"
+    + '<span class="rounded-md bg-secondary px-2 py-0.5 text-xs font-semibold">' + h.risk_level + " risk</span></div>"
+    + '<h1 class="mt-2 text-2xl font-bold tracking-tight">' + esc(h.nearby_facility) + "</h1>"
+    + '<p class="mt-1 text-sm text-muted-foreground">' + esc(h.district) + ", " + esc(h.state) + " \u00B7 " + h.latitude.toFixed(4) + "\u00B0N, " + h.longitude.toFixed(4) + "\u00B0E</p></div>"
+    + '<button type="button" data-act="pdf" data-id="' + h.id + '" class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90">\uD83D\uDCC4 Download report</button>'
+    + "</div></div>"
+    + '<div class="grid gap-6 lg:grid-cols-3">'
+    + '<div class="glass rounded-2xl p-5 lg:col-span-2"><h2 class="mb-4 text-lg font-semibold">Thermal signature</h2>'
+    + '<div class="grid gap-3 sm:grid-cols-2">' + facts + "</div>"
+    + '<div class="mt-6"><h3 class="mb-2 text-base font-semibold">Generated alert</h3>'
+    + '<pre class="whitespace-pre-wrap rounded-xl border border-border bg-foreground/10 p-4 text-sm leading-relaxed text-foreground/75">' + esc(alertText(h)) + "</pre></div></div>"
+    + '<div class="glass rounded-2xl p-5"><h2 class="mb-1 text-lg font-semibold">Human verification</h2>'
+    + '<p class="mb-4 text-xs text-muted-foreground">Confirm or dismiss to tune future classification.</p>'
+    + '<div class="grid grid-cols-2 gap-2">'
+    + '<button type="button" data-act="fb" data-id="' + h.id + '" data-status="confirmed" class="rounded-lg bg-destructive/15 px-3 py-2.5 text-sm font-semibold text-destructive">\u2713 Confirm fire</button>'
+    + '<button type="button" data-act="fb" data-id="' + h.id + '" data-status="false_alarm" class="rounded-lg bg-secondary px-3 py-2.5 text-sm font-semibold text-muted-foreground">\u2715 False alarm</button></div>'
+    + '<div class="mt-5"><p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Verification log</p><div class="space-y-2">' + log + "</div></div></div>"
+    + "</div></div>");
+}
+
+function addFeedback(id, status) {
+  feedback.push({ hotspot_id: id, status: status, created_date: new Date().toISOString() });
+  render();
+}
+
+function genPDF(id) {
+  const h = MOCK.filter(function (x) { return x.id === id; })[0];
+  if (!h) return;
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    window.alert("The PDF library did not load. Check your internet connection and reload the page.");
+    return;
+  }
+  const jsPDF = window.jspdf.jsPDF;
+  const doc = new jsPDF();
+  const w = doc.internal.pageSize.getWidth();
+
+  doc.setFillColor(5, 7, 10); doc.rect(0, 0, w, 30, "F");
+  doc.setTextColor(255, 102, 0); doc.setFontSize(16); doc.setFont("helvetica", "bold");
+  doc.text("THERMOVISION GUARD AI", 14, 15);
+  doc.setTextColor(255, 255, 255); doc.setFontSize(10); doc.setFont("helvetica", "normal");
+  doc.text("Incident report", 14, 23);
+
+  doc.setTextColor(20, 20, 20); doc.setFontSize(13); doc.setFont("helvetica", "bold");
+  doc.text(h.classification + " \u2014 " + h.risk_level + " risk", 14, 45);
+  doc.setFontSize(10); doc.setFont("helvetica", "normal");
+
+  const rows = [
+    ["Hotspot ID", h.id], ["Nearby facility", h.nearby_facility],
+    ["Location", h.district + ", " + h.state],
+    ["Coordinates", h.latitude.toFixed(4) + " N, " + h.longitude.toFixed(4) + " E"],
+    ["Satellite", h.satellite], ["Brightness", h.brightness + " K"],
+    ["Confidence", h.confidence + "%"], ["Persistence", h.persistence + " scan(s)"],
+    ["Detected", time(h.detected_at)], ["Generated", time(new Date().toISOString())]
+  ];
+  let y = 58;
+  rows.forEach(function (r) {
+    doc.setFont("helvetica", "bold"); doc.text(r[0] + ":", 14, y);
+    doc.setFont("helvetica", "normal"); doc.text(String(r[1]), 60, y);
+    y += 9;
+  });
+  doc.setFont("helvetica", "bold"); doc.text("Incident alert", 14, y + 4);
+  doc.setFont("helvetica", "normal");
+  doc.text(doc.splitTextToSize(alertText(h).replace(/\u00B0/g, " deg "), w - 28), 14, y + 12);
+  doc.save("TVG_Report_" + h.id + ".pdf");
+
+  reports.unshift({
+    id: "r" + Date.now(), hotspot_id: h.id, nearby_facility: h.nearby_facility,
+    classification: h.classification, risk_level: h.risk_level, created_date: new Date().toISOString()
+  });
+}
+
+/* ----------------------------- alerts ----------------------------- */
+function alertsPage() {
+  const list = alerts.map(function (a) {
+    const c = CC[a.classification] || "#888";
+    return '<div class="glass rounded-2xl p-5"><div class="flex flex-wrap items-start justify-between gap-3">'
+      + '<div class="flex items-center gap-2.5"><span class="flex h-9 w-9 items-center justify-center rounded-lg" style="background:' + c + "1a;color:" + c + '">\uD83D\uDD25</span>'
+      + '<div><p class="font-semibold text-foreground">' + esc(a.nearby_facility) + "</p>"
+      + '<p class="text-xs text-muted-foreground">' + esc(a.classification) + " \u00B7 " + esc(a.risk_level) + " risk</p></div></div>"
+      + '<a href="#/hotspot/' + a.hotspot_id + '" class="text-xs font-semibold text-primary">View hotspot \u2192</a></div>'
+      + '<pre class="mt-3 whitespace-pre-wrap rounded-xl border border-border bg-foreground/10 p-3 text-xs leading-relaxed text-foreground/70">' + esc(a.alert_text) + "</pre></div>";
+  }).join("");
+  return shell('<div class="space-y-6">' + pageHead("Intelligence feed", "Generated alerts") + '<div class="space-y-3">' + list + "</div></div>");
+}
+
+/* ----------------------------- reports ----------------------------- */
+function reportsPage() {
+  const source = reports.length ? reports : MOCK.slice(0, 6).map(function (h) {
+    return { id: "r" + h.id, hotspot_id: h.id, nearby_facility: h.nearby_facility, classification: h.classification, risk_level: h.risk_level, created_date: h.detected_at };
+  });
+  const list = source.map(function (r) {
+    const c = CC[r.classification] || "#888";
+    return '<div class="glass rounded-2xl p-5"><div class="flex items-start justify-between">'
+      + '<div class="flex h-10 w-10 items-center justify-center rounded-xl" style="background:' + c + "1a;color:" + c + '">\uD83D\uDCC4</div>'
+      + '<span class="rounded-md bg-secondary px-2 py-0.5 text-xs font-semibold">' + (r.risk_level || "\u2014") + "</span></div>"
+      + '<h3 class="mt-3 truncate text-sm font-semibold">' + esc(r.nearby_facility) + "</h3>"
+      + '<p class="text-xs text-muted-foreground">' + esc(r.classification) + "</p>"
+      + '<p class="mt-1 text-[11px] text-muted-foreground">' + time(r.created_date) + "</p>"
+      + '<div class="mt-4 flex gap-2"><a href="#/hotspot/' + r.hotspot_id + '" class="flex-1 rounded-lg border border-border bg-secondary px-3 py-2 text-center text-xs font-semibold text-muted-foreground">Open</a>'
+      + '<button type="button" data-act="pdf" data-id="' + r.hotspot_id + '" class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground">PDF</button></div></div>';
+  }).join("");
+  return shell('<div class="space-y-6">' + pageHead("Compliance archive", "Incident reports")
+    + '<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">' + list + "</div></div>");
+}
+
+/* ----------------------------- analytics ----------------------------- */
+function analyticsPage() {
+  const counts = { "Industrial Fire": 0, "Wildfire": 0, "Agricultural Burning": 0, "Unknown": 0 };
+  MOCK.forEach(function (h) { counts[h.classification]++; });
+  const chips = [
+    ["Industrial", counts["Industrial Fire"], "#ff3b30"],
+    ["Wildfire", counts["Wildfire"], "#ff9500"],
+    ["Agricultural", counts["Agricultural Burning"], "#ffcc00"],
+    ["Unknown", counts["Unknown"], "#8e8e93"]
+  ].map(function (c) {
+    return '<div class="glass flex items-center gap-3 rounded-xl p-4">'
+      + '<div class="flex h-10 w-10 items-center justify-center rounded-lg" style="background:' + c[2] + "1a;color:" + c[2] + '">\u25CF</div>'
+      + '<div><p class="text-2xl font-extrabold text-foreground">' + c[1] + '</p><p class="text-xs text-muted-foreground">' + c[0] + "</p></div></div>";
+  }).join("");
+
+  return shell('<div class="space-y-6">' + pageHead("Insights", "Analytics and trends")
+    + '<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">' + chips + "</div>"
+    + '<div class="grid gap-6 lg:grid-cols-2">'
+    + '<div class="glass rounded-2xl p-5"><h2 class="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Industrial versus natural split</h2><canvas id="pie" height="240"></canvas></div>'
+    + '<div class="glass rounded-2xl p-5"><h2 class="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">District-wise alert counts</h2><canvas id="bar" height="240"></canvas></div>'
+    + "</div></div>");
+}
+
+function destroyCharts() {
+  Object.keys(state.charts).forEach(function (k) {
+    try { if (state.charts[k]) state.charts[k].destroy(); } catch (e) {}
+  });
+  state.charts = {};
+}
+
+function initCharts() {
+  if (typeof Chart === "undefined") return;
+  destroyCharts();
+  const tick = "hsl(var(--muted-foreground))", grid = "hsl(var(--border))";
+
+  const counts = { "Industrial Fire": 0, "Wildfire": 0, "Agricultural Burning": 0, "Unknown": 0 };
+  MOCK.forEach(function (h) { counts[h.classification]++; });
+
+  const pieEl = document.getElementById("pie");
+  if (pieEl) {
+    state.charts.pie = new Chart(pieEl, {
+      type: "doughnut",
+      data: { labels: Object.keys(counts), datasets: [{ data: Object.keys(counts).map(function (k) { return counts[k]; }), backgroundColor: ["#ff3b30", "#ff9500", "#ffcc00", "#8e8e93"], borderWidth: 0 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: tick } } } }
+    });
+  }
+
+  const districts = {};
+  MOCK.forEach(function (h) { districts[h.district] = (districts[h.district] || 0) + 1; });
+  const distArr = Object.keys(districts).map(function (d) { return [d, districts[d]]; })
+    .sort(function (a, b) { return b[1] - a[1]; }).slice(0, 8);
+
+  const barEl = document.getElementById("bar");
+  if (barEl) {
+    state.charts.bar = new Chart(barEl, {
+      type: "bar",
+      data: {
+        labels: distArr.map(function (d) { return d[0]; }),
+        datasets: [{ data: distArr.map(function (d) { return d[1]; }), backgroundColor: "#ff6600", borderRadius: 6 }]
+      },
+      options: {
+        indexAxis: "y", responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { ticks: { color: tick, precision: 0 }, grid: { color: grid } }, y: { ticks: { color: tick }, grid: { display: false } } }
+      }
+    });
+  }
+}
+
+/* ----------------------------- investigate ----------------------------- */
+function investigatePage() {
+  const presets = [
+    ["Ankleshwar GIDC", 21.63, 73.0],
+    ["Dombivli MIDC", 19.21, 73.08],
+    ["Corbett forest", 30.7, 79.4],
+    ["Ludhiana farmland", 30.9, 75.85]
+  ].map(function (p) {
+    return '<button type="button" data-act="preset" data-lat="' + p[1] + '" data-lon="' + p[2] + '" class="rounded-lg border border-border bg-secondary px-3 py-2 text-left text-xs text-muted-foreground hover:text-foreground">\uD83D\uDCCD ' + p[0] + "</button>";
+  }).join("");
+
+  return shell('<div class="space-y-6">'
+    + pageHead("On-demand analysis", "Manual investigation", "Enter any coordinate for an instant FIRMS and OpenStreetMap classification.")
+    + '<div class="grid gap-6 lg:grid-cols-[360px_1fr]">'
+    + '<div class="glass rounded-2xl p-5"><form id="invform" novalidate><div class="space-y-4">'
+    + '<div><label for="ilat" class="mb-1.5 block text-xs font-medium text-muted-foreground">Latitude</label><input id="ilat" inputmode="decimal" class="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50" placeholder="21.6300"/></div>'
+    + '<div><label for="ilon" class="mb-1.5 block text-xs font-medium text-muted-foreground">Longitude</label><input id="ilon" inputmode="decimal" class="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50" placeholder="73.0000"/></div>'
+    + '<button type="submit" id="invbtn" class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90">\uD83D\uDD0D Analyse this location</button>'
+    + "</div></form>"
+    + '<div class="mt-5"><p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Try a preset</p><div class="grid grid-cols-2 gap-2">' + presets + "</div></div></div>"
+    + '<div class="space-y-4"><div class="relative overflow-hidden rounded-2xl border border-border"><div id="imap" style="height:40vh;width:100%"></div></div><div id="invresult"></div></div>'
+    + "</div></div>");
+}
+
+function initInvestigateMap() {
+  if (typeof L === "undefined" || !document.getElementById("imap")) return;
+  if (state.imap) { try { state.imap.remove(); } catch (e) {} state.imap = null; }
+  state.imap = L.map("imap").setView([22.5, 79], 4);
+  L.tileLayer(TILES.dark[0], { attribution: TILES.dark[1], maxZoom: 18 }).addTo(state.imap);
+  setTimeout(function () { if (state.imap) state.imap.invalidateSize(); }, 120);
+}
+
+function investigate() {
+  const lat = parseFloat(document.getElementById("ilat").value);
+  const lon = parseFloat(document.getElementById("ilon").value);
+  const box = document.getElementById("invresult");
+  const btn = document.getElementById("invbtn");
+
+  if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    box.innerHTML = '<div class="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">Enter a latitude between -90 and 90 and a longitude between -180 and 180.</div>';
+    return;
+  }
+
+  btn.textContent = "Analysing\u2026"; btn.disabled = true;
+  box.innerHTML = "";
+
+  lookupLandUse(lat, lon).then(function (lu) {
+    const brightness = 300 + Math.floor(Math.random() * 60);
+    const confidence = 70 + Math.floor(Math.random() * 30);
+    const r = classifyHotspot({ brightness: brightness, confidence: confidence, nearbyLandUse: lu.nearby_facility + " " + lu.landuse, persistence: 1 });
+    const h = {
+      id: "manual", latitude: lat, longitude: lon, brightness: brightness, confidence: confidence,
+      satellite: "On-demand", detected_at: new Date().toISOString(),
+      classification: r.classification, risk_level: r.risk_level,
+      nearby_facility: lu.nearby_facility, district: "", state: "", persistence: 1
+    };
+    const color = CC[r.classification];
+
+    const cells = [
+      ["Nearby (OSM)", lu.nearby_facility + (lu.landuse ? " (" + lu.landuse + ")" : "")],
+      ["Brightness", brightness + " K"],
+      ["Confidence", confidence + "%"]
+    ].map(function (d) {
+      return '<div class="rounded-xl border border-border bg-secondary/50 p-3"><p class="text-xs text-muted-foreground">' + d[0] + "</p>"
+        + '<p class="text-sm font-medium text-foreground">' + esc(d[1]) + "</p></div>";
+    }).join("");
+
+    box.innerHTML = '<div class="glass rounded-2xl p-5">'
+      + '<div class="flex flex-wrap items-center justify-between gap-3"><div class="flex items-center gap-2">'
+      + '<span class="h-3 w-3 rounded-full" style="background:' + color + ";box-shadow:0 0 12px " + color + '"></span>'
+      + '<h2 class="text-lg font-bold" style="color:' + color + '">' + r.classification + "</h2>"
+      + '<span class="rounded-md bg-secondary px-2 py-0.5 text-xs font-semibold">' + r.risk_level + " risk</span></div>"
+      + '<span class="text-xs text-muted-foreground">Score ' + r.score + "</span></div>"
+      + '<div class="mt-4 grid gap-3 sm:grid-cols-3">' + cells + "</div>"
+      + '<div class="mt-4"><p class="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Generated alert</p>'
+      + '<pre class="whitespace-pre-wrap rounded-xl border border-border bg-foreground/10 p-4 text-sm leading-relaxed text-foreground/75">' + esc(alertText(h)) + "</pre></div></div>";
+
+    if (typeof L !== "undefined") {
+      if (state.imap) { try { state.imap.remove(); } catch (e) {} }
+      state.imap = L.map("imap").setView([lat, lon], 9);
+      L.tileLayer(TILES.streets[0], { attribution: TILES.streets[1], maxZoom: 18 }).addTo(state.imap);
+      L.circleMarker([lat, lon], { radius: 12, color: color, fillColor: color, fillOpacity: 0.6, weight: 2 }).addTo(state.imap);
+      setTimeout(function () { if (state.imap) state.imap.invalidateSize(); }, 120);
+    }
+
+    btn.textContent = "\uD83D\uDD0D Analyse this location"; btn.disabled = false;
+  });
+}
+
+/* ----------------------------- high risk ----------------------------- */
+function highRiskPage() {
+  const confirmedFor = function (f) {
+    return feedback.filter(function (x) { return f.ids.indexOf(x.hotspot_id) >= 0 && x.status === "confirmed"; }).length;
+  };
+  const rows = repeatOffenders().map(function (f, i) {
+    return '<div class="grid grid-cols-1 gap-3 px-5 py-4 sm:grid-cols-12 sm:items-center">'
+      + '<div class="sm:col-span-4 flex items-center gap-3"><span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-xs font-bold text-primary">' + (i + 1) + "</span>"
+      + '<div class="min-w-0"><p class="truncate text-sm font-semibold text-foreground">' + esc(f.facility) + "</p>"
+      + '<p class="text-xs text-muted-foreground">Peak brightness ' + f.maxBrightness + "K</p></div></div>"
+      + '<div class="sm:col-span-3 text-xs text-muted-foreground">\uD83D\uDCCD ' + esc(f.district) + ", " + esc(f.state) + "</div>"
+      + '<div class="sm:col-span-1 text-sm font-semibold sm:text-center">' + f.count + "</div>"
+      + '<div class="sm:col-span-1 text-sm font-semibold text-destructive sm:text-center">' + confirmedFor(f) + "</div>"
+      + '<div class="sm:col-span-2"><div class="flex items-center gap-2"><div class="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">'
+      + '<div class="h-full rounded-full" style="width:' + f.riskScore + '%;background:linear-gradient(90deg,#ff6600,#ff3b30)"></div></div>'
+      + '<span class="text-xs font-bold">' + f.riskScore + "</span></div></div>"
+      + '<div class="sm:col-span-1 sm:text-right"><a href="#/investigate" data-act="investigate-at" data-lat="' + f.lat + '" data-lon="' + f.lon + '" class="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">Investigate</a></div>'
+      + "</div>";
+  }).join("");
+
+  return shell('<div class="space-y-6">'
+    + pageHead("Repeat offenders", "High-risk factory watchlist", "Industrial sites flagged repeatedly by satellite thermal detection, ranked by risk score.")
+    + '<div class="glass overflow-hidden rounded-2xl">'
+    + '<div class="hidden grid-cols-12 gap-3 border-b border-border px-5 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground sm:grid">'
+    + '<div class="col-span-4">Facility</div><div class="col-span-3">Location</div><div class="col-span-1 text-center">Flags</div>'
+    + '<div class="col-span-1 text-center">Confirmed</div><div class="col-span-2">Risk score</div><div class="col-span-1 text-right">Action</div></div>'
+    + '<div class="divide-y divide-border">' + rows + "</div></div></div>");
+}
+
+/* ----------------------------- settings ----------------------------- */
+function settingsPage() {
+  const u = user() || { email: "", full_name: "", role: "official" };
+  return shell('<div class="space-y-6">' + pageHead("Account", "Settings and profile")
+    + '<div class="grid gap-6 lg:grid-cols-3">'
+    + '<div class="glass rounded-2xl p-6 lg:col-span-2"><div class="flex items-center gap-4">'
+    + '<div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/15 text-2xl font-bold text-primary">' + esc((u.email || "U").charAt(0).toUpperCase()) + "</div>"
+    + '<div><p class="text-lg font-semibold">' + esc(u.full_name || "Official") + "</p>"
+    + '<p class="text-sm text-muted-foreground">' + esc(u.email) + "</p>"
+    + '<span class="mt-1 inline-flex items-center gap-1 rounded-md bg-primary/15 px-2 py-0.5 text-xs font-semibold text-primary">\uD83D\uDEE1 ' + esc(u.role || "official") + "</span></div></div>"
+    + '<div class="mt-6 grid gap-3 sm:grid-cols-2">'
+    + '<div class="rounded-xl border border-border bg-secondary/50 p-3"><p class="text-xs text-muted-foreground">Detection area</p><p class="text-sm font-medium">India (68\u201397\u00B0E, 8\u201337\u00B0N)</p></div>'
+    + '<div class="rounded-xl border border-border bg-secondary/50 p-3"><p class="text-xs text-muted-foreground">Feed sources</p><p class="text-sm font-medium">VIIRS NOAA-20 and MODIS, near real time</p></div>'
+    + "</div></div>"
+    + '<div class="space-y-4"><div class="glass rounded-2xl p-5"><div class="flex items-center gap-3">' + brandMark("h-10 w-10") + "</div>"
+    + '<p class="mt-3 text-xs text-muted-foreground">Industrial fire intelligence platform</p></div>'
+    + '<button type="button" data-act="logout" class="flex w-full items-center justify-center gap-2 rounded-2xl border border-border bg-secondary px-4 py-3 text-sm font-semibold text-muted-foreground hover:text-destructive">Sign out</button></div>'
+    + "</div></div>");
+}
+
+/* ----------------------------- router ----------------------------- */
+function render() {
+  const app = document.getElementById("app");
+  if (!app) return;
+
+  try {
+    const route = location.hash || "#/";
+    state.route = route;
+    destroyCharts();
+    if (state.map) { try { state.map.remove(); } catch (e) {} state.map = null; }
+    if (state.imap) { try { state.imap.remove(); } catch (e) {} state.imap = null; }
+
+    if (!SS.get("tvg_splashed") && !window._splashed) {
+      window._splashed = true;
+      app.innerHTML = splashHTML();
+      runSplash();
+      return;
+    }
+
+    const protectedRoutes = ["#/dashboard", "#/map", "#/hotspot", "#/alerts", "#/analytics", "#/investigate", "#/high-risk", "#/reports", "#/settings"];
+    const needsAuth = protectedRoutes.some(function (p) { return route.indexOf(p) === 0; });
+    if (needsAuth && !user()) { location.hash = "#/login"; return; }
+
+    let html;
+    if (route === "#/" || route === "") html = landing();
+    else if (route === "#/login") html = authPage("login");
+    else if (route === "#/register") html = authPage("register");
+    else if (route.indexOf("#/dashboard") === 0) html = dashboard();
+    else if (route.indexOf("#/map") === 0) html = mapPage();
+    else if (route.indexOf("#/hotspot/") === 0) html = hotspotPage(route.split("/")[2]);
+    else if (route.indexOf("#/alerts") === 0) html = alertsPage();
+    else if (route.indexOf("#/analytics") === 0) html = analyticsPage();
+    else if (route.indexOf("#/investigate") === 0) html = investigatePage();
+    else if (route.indexOf("#/high-risk") === 0) html = highRiskPage();
+    else if (route.indexOf("#/reports") === 0) html = reportsPage();
+    else if (route.indexOf("#/settings") === 0) html = settingsPage();
+    else html = landing();
+
+    app.innerHTML = html;
+    window.scrollTo(0, 0);
+    observeReveals();
+
+    if (route.indexOf("#/map") === 0) setTimeout(initMap, 0);
+    if (route.indexOf("#/analytics") === 0) setTimeout(initCharts, 0);
+    if (route.indexOf("#/investigate") === 0) {
+      setTimeout(function () {
+        initInvestigateMap();
+        if (window._pendingCoord) {
+          document.getElementById("ilat").value = window._pendingCoord[0];
+          document.getElementById("ilon").value = window._pendingCoord[1];
+          window._pendingCoord = null;
+          investigate();
+        }
+      }, 0);
+    }
+  } catch (err) {
+    app.innerHTML = '<div style="max-width:720px;margin:80px auto;padding:24px;font-family:Inter,sans-serif">'
+      + '<h1 style="color:#ff6600;font-size:20px;font-weight:800">Something went wrong on this screen</h1>'
+      + '<p style="margin-top:8px;opacity:.8;font-size:14px">' + esc(err && err.message ? err.message : String(err)) + "</p>"
+      + '<p style="margin-top:16px"><a href="#/" style="color:#ff6600;font-weight:600">Back to the home page</a></p></div>';
+    console.error(err);
+  }
+}
+
+/* ----------------------------- event delegation ----------------------------- */
+document.addEventListener("click", function (e) {
+  const t = e.target.closest("[data-act]");
+  if (!t) return;
+  const act = t.dataset.act;
+
+  if (act === "theme") { e.preventDefault(); toggleTheme(); }
+  else if (act === "logout") { e.preventDefault(); logout(); }
+  else if (act === "mnav") {
+    e.preventDefault();
+    const m = document.getElementById("mnav");
+    if (m) m.classList.toggle("hidden");
+  }
+  else if (act === "tile") { e.preventDefault(); state.tile = t.dataset.tile; initMap(); }
+  else if (act === "toggle-live") { e.preventDefault(); state.showLive = !state.showLive; drawMapMarkers(); }
+  else if (act === "reload-live") { e.preventDefault(); reloadLive(); }
+  else if (act === "pdf") { e.preventDefault(); genPDF(t.dataset.id); }
+  else if (act === "fb") { e.preventDefault(); addFeedback(t.dataset.id, t.dataset.status); }
+  else if (act === "preset") {
+    e.preventDefault();
+    document.getElementById("ilat").value = t.dataset.lat;
+    document.getElementById("ilon").value = t.dataset.lon;
+  }
+  else if (act === "investigate-at") {
+    window._pendingCoord = [t.dataset.lat, t.dataset.lon];
+  }
+});
+
+document.addEventListener("submit", function (e) {
+  if (e.target.id === "authform") { e.preventDefault(); doAuth(e.target); }
+  else if (e.target.id === "invform") { e.preventDefault(); investigate(); }
+});
+
+window.addEventListener("hashchange", render);
+
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", render);
+else render();
+</script>
+</body>
+</html>
